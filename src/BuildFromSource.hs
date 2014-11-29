@@ -39,6 +39,7 @@ import System.Exit (ExitCode, exitFailure)
 import System.FilePath ((</>))
 import System.IO (hPutStrLn, stderr)
 import System.Process (rawSystem)
+import Control.Monad (mzero, join)
 
 
 (=:) = (,)
@@ -102,7 +103,10 @@ makeRepos artifactDirectory repos =
 makeRepo :: FilePath -> String -> String -> IO ()
 makeRepo root projectName version =
  do  -- get the right version of the repo
-    git [ "clone", "https://github.com/elm-lang/" ++ projectName ++ ".git" ]
+    git $ join
+      [ [ "clone" , "https://github.com/elm-lang/" ++ projectName ++ ".git" ]
+      , cloneArgs
+      ]
     setCurrentDirectory projectName
     git [ "checkout", version ]
     git [ "pull" ]
@@ -113,6 +117,10 @@ makeRepo root projectName version =
 
     -- move back into the root
     setCurrentDirectory root
+    where
+      cloneArgs = case version of
+        "master" -> return "--depth=1"
+        _        -> mzero
 
 
 -- HELPER FUNCTIONS
