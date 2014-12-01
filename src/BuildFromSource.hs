@@ -1,3 +1,4 @@
+{-# LANGUAGE NoMonomorphismRestriction #-}
 {-| This script builds any version of the Elm Platform from source.
 Before you use it, make sure you have the Haskell Platform with a recent
 version of cabal.
@@ -13,6 +14,7 @@ Elm Platform, like this:
         bin/             -- all the relevant executables
         Elm/             -- git repo for the compiler, ready to edit
         elm-repl/        -- git repo for the REPL, ready to edit
+        dist/            -- minimal set of binaries and static files
         ...
 
 All of the executables you need are in bin/ so add
@@ -33,16 +35,21 @@ module Main where
 
 import qualified Data.List as List
 import qualified Data.Map as Map
-import System.Directory (createDirectoryIfMissing, setCurrentDirectory, getCurrentDirectory, doesFileExist)
+import System.Directory (createDirectoryIfMissing, setCurrentDirectory, getCurrentDirectory, getDirectoryContents, copyFile, doesFileExist, doesDirectoryExist)
 import System.Environment (getArgs)
 import System.Exit (ExitCode, exitFailure)
 import System.FilePath ((</>))
 import System.IO (hPutStrLn, stderr)
 import System.Process (rawSystem)
+import System.Path (copyDir)
+import Data.Foldable (forM_)
 import Control.Monad (when, void)
 
 
+infixr 5 =:
+
 (=:) = (,)
+(=::) = (. Map.fromList) . (,)
 
 -- NOTE: The order of the dependencies is also the build order,
 -- so do not just go alphebetizing things.
@@ -73,6 +80,13 @@ configs =
         ]
     ]
 
+assets :: Map.Map FilePath (Map.Map FilePath FilePath)
+assets =
+  Map.fromList
+    [
+      "compiler" =:: [ "interfaces.data" =: "Elm" </> "data" </> "interfaces.data" ]
+    , "reactor"  =:: [ "assets" =: "elm-reactor" </> "assets" ]
+    ]
 
 main :: IO ()
 main =
@@ -82,7 +96,7 @@ main =
           let artifactDirectory = "Elm-Platform" </> version
               repos = configs Map.! version
           in
-              makeRepos artifactDirectory repos
+              makeRepos artifactDirectory repos >> makeDist artifactDirectory
 
       _ ->
         do hPutStrLn stderr $
@@ -93,11 +107,13 @@ main =
 
 makeRepos :: FilePath -> [(String, String)] -> IO ()
 makeRepos artifactDirectory repos =
- do createDirectoryIfMissing True artifactDirectory
+ do orgRoot <- getCurrentDirectory
+    createDirectoryIfMissing True artifactDirectory
     setCurrentDirectory artifactDirectory
     root <- getCurrentDirectory
     cabal [ "sandbox", "init", "--sandbox=." ]
     mapM_ (uncurry (makeRepo root)) repos
+    setCurrentDirectory orgRoot
 
 
 makeRepo :: FilePath -> String -> String -> IO ()
@@ -117,6 +133,28 @@ makeRepo root projectName version =
     -- move back into the root
     setCurrentDirectory root
 
+makeDist :: FilePath -> IO ()
+makeDist artifactDirectory =
+ do
+    let distDir = artifactDirectory </> "dist"
+    let shareDest = distDir </> "share"
+    let binDest = distDir </> "bin"
+    let binSrc = artifactDirectory </> "bin"
+    mapM_ (createDirectoryIfMissing True) [shareDest, binDest]
+
+    binFiles <- getDirectoryContents binSrc
+    forM_ (filter (List.isPrefixOf "elm-") binFiles) $ \f ->
+      copyFile (binSrc </> f) (binDest </> f)
+
+    forM_ (Map.assocs assets) $ \(assetDir, assetMap) ->
+      forM_ (Map.assocs assetMap) $ \(dest, src) -> do
+        let srcPath = artifactDirectory </> src
+        isDir <- doesDirectoryExist srcPath
+        isFile <- doesFileExist srcPath
+        when isDir $ copyDir srcPath (shareDest </> assetDir)
+        when isFile $ do
+          createDirectoryIfMissing False (shareDest </> assetDir)
+          copyFile srcPath (shareDest </> assetDir </> dest)
 
 -- HELPER FUNCTIONS
 
